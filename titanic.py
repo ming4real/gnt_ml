@@ -1,207 +1,242 @@
 #!/usr/bin/env python3
 
 import pandas as pd
-from IPython import display
 import tensorflow as tf
 import numpy as np
-from tensorflow.python.data import Dataset
-from matplotlib import cm
-from matplotlib import gridspec
+import sys
+# import math
+# from tensorflow.python import debug as tf_debug
 from matplotlib import pyplot as plt
+from sklearn import metrics
 
-
-def classifySex(gender):
-    if gender == "male":
-        return 1
-    else:
-        return -1
+tf.logging.set_verbosity(tf.logging.ERROR)
+pd.options.display.max_rows = 30
+pd.options.display.float_format = '{:.4f}'.format
 
 
 def preprocess_features(dataframe):
     selected_features = dataframe[
-        ["Age", "Sex", "Pclass", "Fare", "SibSp", "Parch"]
+        ['Pclass',
+         'Sex',
+         'Age',
+         'Parch',
+         'SibSp',
+         'Embarked']
     ]
 
     processed_features = selected_features.copy()
-    processed_features["Sex"] = dataframe["Sex"].apply(lambda x: classifySex(x))
-    processed_features["SexClass"] = (processed_features["Sex"] * processed_features["Pclass"])
-
+    # synthetic features
+    processed_features['FamilySize'] = processed_features['Parch'] + processed_features['SibSp'] + 1
+    processed_features['IsMinor'] = (processed_features['Age'] < 16).astype(float)
     return processed_features
 
 
 def preprocess_targets(dataframe):
     output_targets = pd.DataFrame()
-
-    output_targets["survival"] = dataframe["Survived"]
+    output_targets["Survived"] = dataframe["Survived"]
     return output_targets
 
 
-def my_input_fn(features, targets, batch_size=1, shuffle=True, num_epochs=None):
-    """Trains a linear regression model.
+def get_quantile_based_boundaries(feature_values, num_buckets):
+    boundaries = np.arange(1.0, num_buckets) / num_buckets
+    quantiles = feature_values.quantile(boundaries, interpolation='linear')
+    return [quantiles[q] for q in quantiles.keys()]
 
-    Args:
-      features: pandas DataFrame of features
-      targets: pandas DataFrame of targets
-      batch_size: Size of batches to be passed to the model
-      shuffle: True or False. Whether to shuffle the data.
-      num_epochs: Number of epochs for which data should be repeated. None = repeat indefinitely
-    Returns:
-      Tuple of (features, labels) for next data batch
-    """
+
+def construct_feature_columns(training_examples):
+
+    sex_col = tf.feature_column.categorical_column_with_vocabulary_list(
+        'Sex', vocabulary_list=('male', 'female'), num_oov_buckets=1)
+    pclass_col = tf.feature_column.categorical_column_with_identity(
+        'Pclass', num_buckets=4, default_value=0)
+    sex_x_pclass_col = tf.feature_column.crossed_column([sex_col, pclass_col], 12)
+
+    return set([
+        sex_col,
+        pclass_col,
+        sex_x_pclass_col
+    ])
+
+
+
+def my_training_input_fn(
+        features, targets, batch_size=1, shuffle=True, num_epochs=None):
 
     # Convert pandas data into a dict of np arrays.
-    features = {key:np.array(value) for key,value in dict(features).items()}
+    features = {key: np.array(value) for key, value in dict(features).items()}
 
     # Construct a dataset, and configure batching/repeating.
-    ds = Dataset.from_tensor_slices((features,targets)) # warning: 2GB limit
+    ds = tf.data.Dataset.from_tensor_slices((features, targets))
     ds = ds.batch(batch_size).repeat(num_epochs)
 
     # Shuffle the data, if specified.
     if shuffle:
-        ds = ds.shuffle(10000)
+        ds = ds.shuffle(500)
 
     # Return the next batch of data.
     features, labels = ds.make_one_shot_iterator().get_next()
     return features, labels
 
 
-def train_model(
+def my_test_input_fn(features):
+
+    features = {key: np.array(value) for key, value in dict(features).items()}
+
+    ds = tf.data.Dataset.from_tensor_slices((features))
+    ds = ds.batch(1).repeat(1)
+    features = ds.make_one_shot_iterator().get_next()
+    return features
+
+
+def train_linear_model(
         learning_rate,
         steps,
         batch_size,
+        l1_regularization_strength,
         feature_columns,
         training_examples,
         training_targets,
         validation_examples,
         validation_targets):
-    """Trains a linear regression model.
-
-    In addition to training, this function also prints training progress information,
-    as well as a plot of the training and validation loss over time.
-
-    Args:
-      learning_rate: A `float`, the learning rate.
-      steps: A non-zero `int`, the total number of training steps. A training step
-        consists of a forward and backward pass using a single batch.
-      feature_columns: A `set` specifying the input feature columns to use.
-      training_examples: A `DataFrame` containing one or more columns from
-        `california_housing_dataframe` to use as input features for training.
-      training_targets: A `DataFrame` containing exactly one column from
-        `california_housing_dataframe` to use as target for training.
-      validation_examples: A `DataFrame` containing one or more columns from
-        `california_housing_dataframe` to use as input features for validation.
-      validation_targets: A `DataFrame` containing exactly one column from
-        `california_housing_dataframe` to use as target for validation.
-
-    Returns:
-      A `LinearRegressor` object trained on the training data.
-    """
 
     periods = 10
     steps_per_period = steps / periods
 
-    # Create a linear regressor object.
-    my_optimizer = tf.train.FtrlOptimizer(learning_rate=learning_rate)
-    my_optimizer = tf.contrib.estimator.clip_gradients_by_norm(my_optimizer, 5.0)
-    linear_regressor = tf.estimator.LinearRegressor(
+    # Create a classifier object.
+    my_optimizer = tf.train.FtrlOptimizer(
+        learning_rate=learning_rate,
+        l1_regularization_strength=l1_regularization_strength)
+    my_optimizer = tf.contrib.estimator.clip_gradients_by_norm(
+        my_optimizer, 5.0)
+    linear_classifier = tf.estimator.LinearClassifier(
         feature_columns=feature_columns,
-        optimizer=my_optimizer
-    )
+        optimizer=my_optimizer)
 
-    training_input_fn = lambda: my_input_fn(training_examples,
-                                            training_targets["SexClass"],
-                                            batch_size=batch_size)
-    predict_training_input_fn = lambda: my_input_fn(training_examples,
-                                                    training_targets["SexClass"],
-                                                    num_epochs=1,
-                                                    shuffle=False)
-    predict_validation_input_fn = lambda: my_input_fn(validation_examples,
-                                                      validation_targets["SexClass"],
-                                                      num_epochs=1,
-                                                      shuffle=False)
+    training_input_fn = lambda: my_training_input_fn(training_examples,
+                                                     training_targets["Survived"],
+                                                     batch_size=batch_size)
+    predict_training_input_fn = lambda: my_training_input_fn(training_examples,
+                                                             training_targets["Survived"],
+                                                             num_epochs=1,
+                                                             shuffle=False)
+    predict_validation_input_fn = lambda: my_training_input_fn(validation_examples,
+                                                               validation_targets["Survived"],
+                                                               num_epochs=1,
+                                                               shuffle=False)
 
-    # Train the model, but do so inside a loop so that we can periodically assess
-    # loss metrics.
     print("Training model...")
-    print("RMSE (on training data):")
-    training_rmse = []
-    validation_rmse = []
-    for period in range (0, periods):
+    print("LogLoss (on training data):")
+    validation_classes = []
+    training_loglosses = []
+    validation_loglosses = []
+    for period in range(0, periods):
         # Train the model, starting from the prior state.
-        linear_regressor.train(
-            input_fn=training_input_fn,
-            steps=steps_per_period
-        )
-        # Take a break and compute predictions.
-        training_predictions = linear_regressor.predict(input_fn=predict_training_input_fn)
-        training_predictions = np.array([item['predictions'][0] for item in training_predictions])
-        validation_predictions = linear_regressor.predict(input_fn=predict_validation_input_fn)
-        validation_predictions = np.array([item['predictions'][0] for item in validation_predictions])
+        linear_classifier.train(input_fn=training_input_fn,
+                                steps=steps_per_period)
+
+        # compute predictions.
+        training_predictions = linear_classifier.predict(
+            input_fn=predict_training_input_fn)
+        training_probabilities = np.array(
+            [item['probabilities'] for item in training_predictions])
+        validation_predictions = linear_classifier.predict(
+            input_fn=predict_validation_input_fn)
+        validation_probabilities = np.array(
+            [item['probabilities'] for item in validation_predictions])
+        validation_classes = np.array(
+            [item['class_ids'][0] for item in validation_predictions])
 
         # Compute training and validation loss.
-        training_root_mean_squared_error = tf.math.sqrt(
-            tf.metrics.mean_squared_error(training_predictions, training_targets))
-        validation_root_mean_squared_error = tf.math.sqrt(
-            tf.metrics.mean_squared_error(validation_predictions, validation_targets))
-        # Occasionally print the current loss.
-        print("  period %02d : %0.2f" % (period, training_root_mean_squared_error))
-        # Add the loss metrics from this period to our list.
-        training_rmse.append(training_root_mean_squared_error)
-        validation_rmse.append(validation_root_mean_squared_error)
-    print ("Model training finished.")
+        training_logloss = metrics.log_loss(
+            training_targets, training_probabilities)
+        validation_logloss = metrics.log_loss(
+            validation_targets, validation_probabilities)
+
+        print("  period {0:d} : {1:f}".format(period, training_logloss))
+
+        training_loglosses.append(training_logloss)
+        validation_loglosses.append(validation_logloss)
+
+    print("Model Training finished")
+    print("Evaluate Model")
+    results = linear_classifier.evaluate(
+        input_fn=predict_validation_input_fn,
+        steps=100)
+
+    for key in sorted(results):
+        print(" {0} : {1}".format(key, results[key]))
+
+    return linear_classifier, training_loglosses, validation_loglosses
 
 
-    # Output a graph of loss metrics over periods.
-    plt.ylabel("RMSE")
-    plt.xlabel("Periods")
-    plt.title("Root Mean Squared Error vs. Periods")
-    plt.tight_layout()
-    plt.plot(training_rmse, label="training")
-    plt.plot(validation_rmse, label="validation")
-    plt.legend()
+training_data_set = pd.read_csv("titanic_data/train.csv", sep=',')
+training_data_set['Age'].fillna(training_data_set['Age'].median(), inplace=True)
+training_data_set['Fare'].fillna(training_data_set['Fare'].mean(), inplace=True)
+training_data_set['Embarked'].fillna('', inplace=True)
 
-    return linear_regressor
-
-
-def construct_feature_columns():
-
-    sex = tf.feature_column.numeric_column("Sex")
-    pclass = tf.feature_column.numeric_column("Pclass")
-
-    cross_sex_class = tf.feature_column.crossed_column(
-        set([training_examples["Sex"], training_examples["Pclass"]]), hash_bucket_size=1000
-    )
-
-    feature_columns = set([
-        sex,
-        pclass,
-        cross_sex_class])
-
-    return feature_columns
-
-
-training_data_set = pd.read_csv("file:///Users/ming/wip/tensorflow/NorwichMeetup/titanic_data/train.csv")
+training_data_set = training_data_set.reindex(
+    np.random.permutation(training_data_set.index))
 
 training_examples = preprocess_features(training_data_set.head(500))
 training_targets = preprocess_targets(training_data_set.head(500))
 
-validation_examples = preprocess_features(training_data_set.tail(200))
-validation_targets = preprocess_targets(training_data_set.tail(200))
+validation_examples = preprocess_features(training_data_set.tail(400))
+validation_targets = preprocess_targets(training_data_set.tail(400))
 
-display.display(training_examples.describe())
+# print(training_examples.describe())
+# print(validation_examples.describe())
+# print(training_targets.describe())
+# print(validation_targets.describe())
 
-correlation_dataframe = training_examples.copy()
-correlation_dataframe["Survivability"] = training_targets["survival"]
+corr_frame = training_examples.copy()
+corr_frame['Survived'] = training_targets['Survived']
+#  print("Correltion matrix:")
+#  print(corr_frame.corr())
 
-print(correlation_dataframe.corr())
-
-train_model(
-    learning_rate=1.0,
-    steps=500,
-    batch_size=100,
-    feature_columns=construct_feature_columns(),
+learning_rate = float(sys.argv[1])
+steps = int(sys.argv[2])
+batch_size = int(sys.argv[3])
+l1_reg = float(sys.argv[4])
+linear_classifier, train_losses, validation_losses = train_linear_model(
+    learning_rate=learning_rate,
+    steps=steps,
+    batch_size=batch_size,
+    l1_regularization_strength=l1_reg,
+    feature_columns=construct_feature_columns(training_examples),
     training_examples=training_examples,
     training_targets=training_targets,
     validation_examples=validation_examples,
-    validation_targets=validation_targets)
+    validation_targets=validation_targets
+)
 
+
+# Output a graph of loss metrics over periods.
+plt.ylabel("LogLosses")
+plt.xlabel("Periods")
+plt.title("LogLoss vs. Periods")
+plt.tight_layout()
+plt.plot(train_losses, label="training")
+plt.plot(validation_losses, label="validation")
+plt.legend()
+plt.draw()
+plt.pause(2)
+
+
+print("Try on unknown test set")
+test_data_set = pd.read_csv("titanic_data/test.csv", sep=",")
+test_examples = preprocess_features(test_data_set)
+
+def predict_test_input_fn():
+    return my_test_input_fn(test_examples)
+
+
+test_predictions = linear_classifier.predict(predict_test_input_fn)
+test_classes = np.array([item['class_ids'][0] for item in test_predictions])
+
+test_result_df = pd.DataFrame()
+test_result_df['PassengerId'] = test_data_set['PassengerId']
+test_result_df['Survived'] = test_classes
+print("save file to csv")
+test_result_df.to_csv("titanic_data/linear_model_sex_x_pclass_submission.csv", sep=",", index=False)
+
+input("Hit Enter")
