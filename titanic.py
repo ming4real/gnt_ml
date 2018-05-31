@@ -195,10 +195,10 @@ corr_frame['Survived'] = training_targets['Survived']
 #  print(corr_frame.corr())
 
 parser = argparse.ArgumentParser(description='Machine Learning experiments')
-parser.add_argument('--learning_rate', type=float, default=0.005, help="Learning rate")
-parser.add_argument('--steps', type=int, default=120, help="Number of steps")
-parser.add_argument('--batch_size', type=int, default=5, help="Batch Size")
-parser.add_argument('--strength', type=float, default=0.00001, help="L1 Regularization Strength")
+parser.add_argument('-r', '--learning_rate', type=float, default=0.005, help="Learning rate")
+parser.add_argument('-s', '--steps', type=int, default=120, help="Number of steps")
+parser.add_argument('-b', '--batch_size', type=int, default=5, help="Batch Size")
+parser.add_argument('-l', '--strength', type=float, default=0.00001, help="L1 Regularization Strength")
 
 args = parser.parse_args()
 
