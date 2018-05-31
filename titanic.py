@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import argparse
 
 import pandas as pd
 import tensorflow as tf
@@ -193,10 +194,19 @@ corr_frame['Survived'] = training_targets['Survived']
 #  print("Correltion matrix:")
 #  print(corr_frame.corr())
 
-learning_rate = float(sys.argv[1])
-steps = int(sys.argv[2])
-batch_size = int(sys.argv[3])
-l1_reg = float(sys.argv[4])
+parser = argparse.ArgumentParser(description='Machine Learning experiments')
+parser.add_argument('--learning_rate', type=float, default=0.005, help="Learning rate")
+parser.add_argument('--steps', type=int, default=120, help="Number of steps")
+parser.add_argument('--batch_size', type=int, default=5, help="Batch Size")
+parser.add_argument('--strength', type=float, default=0.00001, help="L1 Regularization Strength")
+
+args = parser.parse_args()
+
+
+learning_rate = args.learning_rate
+steps = args.steps
+batch_size = args.batch_size
+l1_reg = args.strength
 linear_classifier, train_losses, validation_losses = train_linear_model(
     learning_rate=learning_rate,
     steps=steps,
