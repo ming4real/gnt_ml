@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import argparse
 
 import pandas as pd
 import tensorflow as tf
@@ -21,7 +22,8 @@ def preprocess_features(dataframe):
          'Age',
          'Parch',
          'SibSp',
-         'Embarked']]
+         'Embarked',
+         'PassengerId']]
 
     processed_features = selected_features.copy()
     processed_features['Age'].fillna(processed_features['Age'].median(), inplace=True)
@@ -164,6 +166,13 @@ def train_dnn_model(
 
     return dnn_classifier, training_loglosses, validation_loglosses
 
+parser = argparse.ArgumentParser(description='Machine Learning experiments')
+parser.add_argument('-r', '--learning_rate', type=float, default=0.005, help="Learning rate")
+parser.add_argument('-s', '--steps', type=int, default=120, help="Number of steps")
+parser.add_argument('-b', '--batch_size', type=int, default=5, help="Batch Size")
+parser.add_argument('-l', '--strength', type=float, default=0.00001, help="L1 Regularization Strength")
+
+args = parser.parse_args()
 
 training_data_set = pd.read_csv("titanic_data/train.csv", sep=',')
 training_data_set = training_data_set.reindex(np.random.permutation(training_data_set.index))
@@ -181,10 +190,10 @@ corr_frame['Survived'] = training_targets['Survived']
 
 hidden_units = [16, 16, 6]
 
-learning_rate = float(sys.argv[1])
-steps = int(sys.argv[2])
-batch_size = int(sys.argv[3])
-l1_regularization = float(sys.argv[4])
+learning_rate = args.learning_rate
+steps = args.steps
+batch_size = args.batch_size
+l1_regularization = args.strength
 
 dnn_classifier, train_losses, validation_losses = train_dnn_model(
     learning_rate=learning_rate,
@@ -223,15 +232,13 @@ def eval_input_fn():
 
 print("Try on test set")
 
-
-def predict_test_input_fn(examples):
-    return my_test_input_fn(examples)
-
-
 test_data_set = pd.read_csv("titanic_data/test.csv")
 test_examples = preprocess_features(test_data_set)
 
-test_predictions = dnn_classifier.predict(predict_test_input_fn(test_examples))
+def predict_test_input_fn():
+    return my_test_input_fn(test_examples)
+
+test_predictions = dnn_classifier.predict(predict_test_input_fn)
 test_classes = np.array([item['class_ids'][0] for item in test_predictions])
 
 test_results_df = pd.DataFrame()

@@ -4,9 +4,6 @@ import argparse
 import pandas as pd
 import tensorflow as tf
 import numpy as np
-import sys
-# import math
-# from tensorflow.python import debug as tf_debug
 from matplotlib import pyplot as plt
 from sklearn import metrics
 
@@ -45,24 +42,17 @@ def get_quantile_based_boundaries(feature_values, num_buckets):
 
 
 def construct_feature_columns(training_examples):
-
     sex_col = tf.feature_column.categorical_column_with_vocabulary_list(
         'Sex', vocabulary_list=('male', 'female'), num_oov_buckets=1)
     pclass_col = tf.feature_column.categorical_column_with_identity(
         'Pclass', num_buckets=4, default_value=0)
     sex_x_pclass_col = tf.feature_column.crossed_column([sex_col, pclass_col], 12)
 
-    return set([
-        sex_col,
-        pclass_col,
-        sex_x_pclass_col
-    ])
-
+    return {sex_col, pclass_col, sex_x_pclass_col}
 
 
 def my_training_input_fn(
         features, targets, batch_size=1, shuffle=True, num_epochs=None):
-
     # Convert pandas data into a dict of np arrays.
     features = {key: np.array(value) for key, value in dict(features).items()}
 
@@ -80,10 +70,9 @@ def my_training_input_fn(
 
 
 def my_test_input_fn(features):
-
     features = {key: np.array(value) for key, value in dict(features).items()}
 
-    ds = tf.data.Dataset.from_tensor_slices((features))
+    ds = tf.data.Dataset.from_tensor_slices(features)
     ds = ds.batch(1).repeat(1)
     features = ds.make_one_shot_iterator().get_next()
     return features
@@ -99,7 +88,6 @@ def train_linear_model(
         training_targets,
         validation_examples,
         validation_targets):
-
     periods = 10
     steps_per_period = steps / periods
 
@@ -127,7 +115,7 @@ def train_linear_model(
 
     print("Training model...")
     print("LogLoss (on training data):")
-    validation_classes = []
+    # validation_classes = []
     training_loglosses = []
     validation_loglosses = []
     for period in range(0, periods):
@@ -136,16 +124,11 @@ def train_linear_model(
                                 steps=steps_per_period)
 
         # compute predictions.
-        training_predictions = linear_classifier.predict(
-            input_fn=predict_training_input_fn)
-        training_probabilities = np.array(
-            [item['probabilities'] for item in training_predictions])
-        validation_predictions = linear_classifier.predict(
-            input_fn=predict_validation_input_fn)
-        validation_probabilities = np.array(
-            [item['probabilities'] for item in validation_predictions])
-        validation_classes = np.array(
-            [item['class_ids'][0] for item in validation_predictions])
+        training_predictions = linear_classifier.predict(input_fn=predict_training_input_fn)
+        training_probabilities = np.array([item['probabilities'] for item in training_predictions])
+        validation_predictions = linear_classifier.predict(input_fn=predict_validation_input_fn)
+        validation_probabilities = np.array([item['probabilities'] for item in validation_predictions])
+        # validation_classes = np.array([item['class_ids'][0] for item in validation_predictions])
 
         # Compute training and validation loss.
         training_logloss = metrics.log_loss(
@@ -202,7 +185,6 @@ parser.add_argument('-l', '--strength', type=float, default=0.00001, help="L1 Re
 
 args = parser.parse_args()
 
-
 learning_rate = args.learning_rate
 steps = args.steps
 batch_size = args.batch_size
@@ -219,7 +201,6 @@ linear_classifier, train_losses, validation_losses = train_linear_model(
     validation_targets=validation_targets
 )
 
-
 # Output a graph of loss metrics over periods.
 plt.ylabel("LogLosses")
 plt.xlabel("Periods")
@@ -231,10 +212,10 @@ plt.legend()
 plt.draw()
 plt.pause(2)
 
-
 print("Try on unknown test set")
 test_data_set = pd.read_csv("titanic_data/test.csv", sep=",")
 test_examples = preprocess_features(test_data_set)
+
 
 def predict_test_input_fn():
     return my_test_input_fn(test_examples)
